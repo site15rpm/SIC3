@@ -24,7 +24,7 @@
       });
 
       const initialData = await carregarDadosPlanilha({
-        sheetId: idbase,
+        sheetId: window.idTBPrimaria || idbase,
         sheet: "dt-primaria",
         query: "SELECT A,B,C,D",
       });
