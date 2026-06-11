@@ -9,17 +9,20 @@
       const condicaoWhere =
         userMLog === "admin" ? "A IS NOT NULL" : `A = '${userMLog}'`;
 
-      const [conveniosData, anosData] = await Promise.all([
+      const idBDConvenios = window.idBDConvenios || idbase;
+
+      const [conveniosData, anosDisponiveisRes] = await Promise.all([
         carregarDadosPlanilha({
-          sheetId: idbase,
+          sheetId: idBDConvenios,
           sheet: "convenios",
           query: `SELECT A,B,C,D,E,F,G,H WHERE ${condicaoWhere}`,
         }),
-        carregarDadosPlanilha({
-          sheetId: idbase,
-          sheet: "principal",
-          query: "SELECT D WHERE D IS NOT NULL",
-        }),
+        new Promise((resolve) => {
+          google.script.run
+            .withSuccessHandler(res => resolve(res))
+            .withFailureHandler(() => resolve({ success: false }))
+            .obterAnosDisponiveis(window.rpm || "15");
+        })
       ]);
 
       ADMIN_CONFIG.dados.convenios = [];
@@ -55,13 +58,8 @@
         });
       }
 
-      const anoAtual = new Date().getFullYear();
-      const anoAnterior = anoAtual - 1;
-      const todosAnos =
-        anosData && anosData.length > 1
-          ? anosData.slice(1).map((row) => String(row[0]).trim())
-          : [];
-      todosAnos.push(anoAtual.toString(), anoAnterior.toString());
+      const anoAtual = new Date().getFullYear().toString();
+      const todosAnos = (anosDisponiveisRes && anosDisponiveisRes.success) ? anosDisponiveisRes.anos : [anoAtual];
       ADMIN_CONFIG.dados.anos = [...new Set(todosAnos)]
         .filter((a) => a && /^\d{4}$/.test(a))
         .sort((a, b) => b - a);
