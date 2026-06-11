@@ -31,99 +31,93 @@ function doPost(e) {
   }
 }
 
-/**
- * Roteador central para as requisições de API vindas do frontend local da extensão
- */
 function handleApiAction(action, body) {
-  const token = body.authToken;
-  const params = body.params || {};
-  
-  // Rota de Login (Pública)
-  if (action === "login") {
-    const result = loginCheck(params.username, params.password);
-    return ContentService.createTextOutput(JSON.stringify(result))
-      .setMimeType(ContentService.MimeType.TEXT);
-  }
-  
-  // Validação do Token de Acesso (Rotas Protegidas)
-  const usuario = validateAuthToken(token);
-  if (!usuario) {
-    return ContentService.createTextOutput(JSON.stringify({
-      success: false, 
-      message: "Sessão expirada ou acesso não autorizado. Faça login novamente.", 
-      errorCode: "UNAUTHORIZED"
-    })).setMimeType(ContentService.MimeType.TEXT);
-  }
-  
+  const params = body.params || []; // params é o array de argumentos posicionais [arg1, arg2, ...]
   let result;
   
   switch (action) {
-    case "carregarConvenios":
-      result = carregarConveniosMunicipio(params.municipio || usuario.municipio, usuario);
+    case "loginCheck":
+      result = loginCheck(params[0], params[1]);
       break;
       
-    case "salvarDados":
-      result = salvarDadosNaPlanilha(token, params.municipio, params.convenio, params.ano, params.mes, params.dados);
+    case "carregarConveniosMunicipio":
+      result = carregarConveniosMunicipio(params[0], params[1]);
       break;
       
-    case "obterItens99":
-      result = obterDadosItens99(token, params.filtros || {});
+    case "salvarDadosNaPlanilha":
+      result = salvarDadosNaPlanilha(params[0], params[1], params[2], params[3], params[4], params[5]);
+      break;
+      
+    case "obterDadosItens99":
+      result = obterDadosItens99(params[0], params[1]);
       break;
       
     case "gerenciarItem99":
-      result = gerenciarItem99(params.operacao, params.dados);
+      result = gerenciarItem99(params[0], params[1]);
       break;
       
-    case "excluirItem99":
-      result = excluirItem99Principal(token, params.item99Codigo);
+    case "excluirItem99Principal":
+      result = excluirItem99Principal(params[0], params[1]);
       break;
       
     case "atualizarStatusItem99":
-      result = atualizarStatusItem99(token, params.item99Codigo, params.novoStatus);
+      result = atualizarStatusItem99(params[0], params[1], params[2]);
       break;
       
     case "substituirItem99":
-      result = substituirItem99(token, params.dados);
+      result = substituirItem99(params[0], params[1]);
       break;
       
     case "gerenciarEnderecoMedidor":
-      result = gerenciarEnderecoMedidor(token, params.dados);
+      result = gerenciarEnderecoMedidor(params[0], params[1]);
       break;
       
     case "obterDetalhesItemPortal":
-      result = obterDetalhesItemPortal(params.itemId);
+      result = obterDetalhesItemPortal(params[0]);
       break;
       
     case "buscarNoPortalCompras":
-      result = buscarNoPortalCompras(params.termoBusca);
+      result = buscarNoPortalCompras(params[0]);
       break;
       
     case "verificarStatusBloqueio":
-      result = verificarStatusBloqueio(params.municipio, params.convenio, params.ano, params.mes);
+      result = verificarStatusBloqueio(params[0], params[1], params[2], params[3]);
       break;
       
     case "atualizarStatusEdicao":
-      result = atualizarStatusEdicao(token, params.municipio, params.convenio, params.ano, params.mes, params.status);
+      result = atualizarStatusEdicao(params[0], params[1], params[2], params[3], params[4], params[5]);
       break;
       
     case "agendarRebloqueio24h":
-      result = agendarRebloqueio24h(params.municipio, params.convenio, params.ano, params.mes, usuario.username);
+      result = agendarRebloqueio24h(params[0], params[1], params[2], params[3], params[4]);
       break;
       
     case "incluirConvenio":
-      result = incluirConvenio(token, params.municipio, params.convenio, params.preposto_n, params.preposto_pg, params.preposto, params.unidade, params.dataInicio, params.dataFim);
+      result = incluirConvenio(params[0], params[1], params[2], params[3], params[4], params[5], params[6], params[7], params[8]);
       break;
       
     case "alterarConvenio":
-      result = alterarConvenio(token, params.municipio, params.convenio, params.preposto_n, params.preposto_pg, params.preposto, params.unidade, params.dataInicio, params.dataFim);
+      result = alterarConvenio(params[0], params[1], params[2], params[3], params[4], params[5], params[6], params[7], params[8]);
       break;
       
     case "excluirConvenio":
-      result = excluirConvenio(token, params.municipio, params.convenio);
+      result = excluirConvenio(params[0], params[1], params[2]);
+      break;
+
+    case "salvarItensPrimariosEmLote":
+      result = salvarItensPrimariosEmLote(params[0]);
+      break;
+      
+    case "voltarParaPainelAdmin":
+      result = voltarParaPainelAdmin(params[0]);
+      break;
+      
+    case "logoutUser":
+      result = logoutUser();
       break;
       
     default:
-      throw new Error("Rota de API '" + action + "' não cadastrada no servidor.");
+      throw new Error("Ação da API '" + action + "' não registrada no servidor.");
   }
   
   return ContentService.createTextOutput(JSON.stringify(result !== undefined ? result : { success: true }))
