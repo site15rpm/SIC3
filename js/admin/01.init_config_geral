@@ -117,14 +117,25 @@
           }
         }
 
-        if (changedElement.is("#mes")) {
-          const mesAtual = changedElement.val();
-          if (userIsAdmin && mesAtual !== "TODOS") {
-            const municipioSelect = $("#municipio");
-            if (municipioSelect.val() !== "TODOS") {
-              municipioSelect.val("TODOS");
+        if (changedElement.is("#ano")) {
+          const novoAno = changedElement.val();
+          window.ano = novoAno;
+          changeTimeout = setTimeout(async () => {
+            if (typeof mostrarCarregamento === 'function') mostrarCarregamento("Carregando base de dados do ano " + novoAno + "...");
+            try {
+              const res = await executarApiGas("obterIdPlanilha", [window.rpm || "15", novoAno]);
+              if (res && res.success && res.spreadsheetId) {
+                window.idbase = res.spreadsheetId;
+                if (typeof idbase !== "undefined") idbase = res.spreadsheetId;
+              }
+            } catch (e) {
+              console.error("Erro ao obter planilha do ano:", e);
+            } finally {
+              if (typeof ocultarCarregamento === 'function') ocultarCarregamento();
             }
-          }
+            await handleFilterChange();
+          }, 150);
+          return;
         }
 
         changeTimeout = setTimeout(handleFilterChange, 150);
