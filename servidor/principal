@@ -52,28 +52,7 @@ function doGet(e) {
       return mostrarArquivosDoProjeto();
     }
     
-    return HtmlService.createHtmlOutput(`
-      <html>
-        <head>
-          <title>Página não encontrada</title>
-          <style>
-            body { font-family: Arial, sans-serif; margin: 20px; text-align: center; }
-            .error { color: red; background: #ffebee; padding: 15px; border-radius: 4px; margin: 20px auto; max-width: 600px; }
-            a { color: #1a73e8; text-decoration: none; }
-            a:hover { text-decoration: underline; }
-          </style>
-        </head>
-        <body>
-          <h1>Página não encontrada</h1>
-          <div class="error">
-            <p>A página solicitada '${page}' não existe.</p>
-          </div>
-          <p><a href="?">Voltar para a página inicial</a></p>
-        </body>
-      </html>
-    `)
-    .setTitle('Página não encontrada')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+    return gerarPaginaNaoEncontrada(page);
 
   } catch (error) {
     return HtmlService.createHtmlOutput(gerarHtmlErro(error))
@@ -303,34 +282,13 @@ function generateAuthToken(username, municipio, isAdmin) {
  */
 function generateHmacSignature(data, key) {
   try {
-    const dataBytes = Utilities.newBlob(data).getBytes();
-    const keyBytes = Utilities.newBlob(key).getBytes();
-    let processedKey = keyBytes;
-    if (keyBytes.length > 64) {
-      processedKey = Utilities.computeDigest(
-        Utilities.DigestAlgorithm.SHA_256,
-        keyBytes
-      );
-    }
-    const ipadValue = 0x36;
-    const opadValue = 0x5c;
-    const ipad = new Array(64).fill(ipadValue);
-    const opad = new Array(64).fill(opadValue);
-    for (let i = 0; i < processedKey.length; i++) {
-      ipad[i] = processedKey[i] ^ ipadValue;
-      opad[i] = processedKey[i] ^ opadValue;
-    }
-    const innerInput = [...ipad, ...dataBytes];
-    const innerHash = Utilities.computeDigest(
-      Utilities.DigestAlgorithm.SHA_256,
-      innerInput
+    const signatureBytes = Utilities.computeHmacSignature(
+      Utilities.MacAlgorithm.HMAC_SHA_256, 
+      data, 
+      key,
+      Utilities.Charset.UTF_8
     );
-    const outerInput = [...opad, ...innerHash];
-    const hmacDigest = Utilities.computeDigest(
-      Utilities.DigestAlgorithm.SHA_256,
-      outerInput
-    );
-    return Utilities.base64EncodeWebSafe(hmacDigest);
+    return Utilities.base64EncodeWebSafe(signatureBytes);
   } catch (error) {
     console.error("Erro ao gerar assinatura HMAC:", error);
     return "";
@@ -406,6 +364,7 @@ function logoutUser() {
 function instrumentarCodigo(codigo) {
   if (!codigo || typeof codigo != 'string') return codigo;
   const regexFuncoes = /function\s+([a-zA-Z0-9_$]+)\s*\(([^)]*)\)\s*\{/g;
+  const logEntrada = '\n    console.log("[DEBUG] Executando: " + arguments.callee.name);\n';
 
   function processarFuncao(match, nome, params) {
     if (nome.startsWith('_')) return match;
@@ -965,10 +924,13 @@ function sincronizarItens99(authToken, spreadsheet, municipio, convenio, ano, me
         const rowIndex = existingItem.rowIndex;
         const existingRowData = existingItem.rowData;
 
-        item99Sheet.getRange(rowIndex, 1).setValue(timestamp);
-        item99Sheet.getRange(rowIndex, 7).setValue(String(rowCliente[2]));
-        item99Sheet.getRange(rowIndex, 8).setValue(String(rowCliente[4]));
-        item99Sheet.getRange(rowIndex, 9).setValue(String(rowCliente[3]));
+        // Preparamos o array com a linha completa contendo as atualizações
+        const rowValues = [...existingRowData];
+
+        rowValues[0] = timestamp;
+        rowValues[6] = String(rowCliente[2]); // Coluna G: Descrição
+        rowValues[7] = String(rowCliente[4]); // Coluna H: Elemento Despesa
+        rowValues[8] = String(rowCliente[3]); // Coluna I: Unidade Distribuição
 
         let fileUrl = existingRowData[11];
         if (rowCliente[12] && rowCliente[13]) {
@@ -978,31 +940,32 @@ function sincronizarItens99(authToken, spreadsheet, municipio, convenio, ano, me
             mimeType: rowCliente[13],
             fileName: `${codigoCliente} - ${nomeArquivoSanitizado}`
           }, fileUrl);
-          item99Sheet.getRange(rowIndex, 12).setValue(fileUrl);
+          rowValues[11] = fileUrl; // Coluna L: Link Nota Fiscal
         }
 
         let item99Info = {};
         console.log(`[sincronizarItens99] EDIT: Raw item99Info string from client: ${rowCliente[10]}`);
         try {
-            if (rowCliente[10]) {
-                item99Info = JSON.parse(rowCliente[10]);
-                console.log(`[sincronizarItens99] EDIT: Parsed item99Info:`, JSON.stringify(item99Info));
-            }
+          if (rowCliente[10]) {
+            item99Info = JSON.parse(rowCliente[10]);
+            console.log(`[sincronizarItens99] EDIT: Parsed item99Info:`, JSON.stringify(item99Info));
+          }
         } catch(e) {
-            console.error(`Falha ao fazer parse do item99Info para o item existente ${codigoCliente}. Conteúdo: ${rowCliente[10]}. Erro: ${e.message}`);
+          console.error(`Falha ao fazer parse do item99Info para o item existente ${codigoCliente}. Conteúdo: ${rowCliente[10]}. Erro: ${e.message}`);
         }
 
-        // CORREÇÃO: Apenas atualiza os termos de busca se novos termos forem fornecidos.
+        // Apenas atualiza os termos de busca se novos termos forem fornecidos.
         if (item99Info && typeof item99Info.searchTerms === 'string' && item99Info.searchTerms.trim() !== '') {
           console.log(`[sincronizarItens99] EDIT: Updating search terms for ${codigoCliente} to: "${item99Info.searchTerms}"`);
-          item99Sheet.getRange(rowIndex, 10).setValue(item99Info.searchTerms);
-        } else {
-          console.log(`[sincronizarItens99] EDIT: No new search terms provided for ${codigoCliente}. Preserving existing value: "${existingRowData[9]}"`);
+          rowValues[9] = item99Info.searchTerms; // Coluna J: Termos Busca
         }
 
         if (existingRowData[statusColIdx] === 'excluido') {
-          item99Sheet.getRange(rowIndex, statusColIdx + 1).setValue('pendente');
+          rowValues[10] = 'pendente'; // Coluna K: Status
         }
+
+        // Grava a linha atualizada em uma única chamada de rede
+        item99Sheet.getRange(rowIndex, 1, 1, rowValues.length).setValues([rowValues]);
       }
     }
   }
@@ -1291,17 +1254,31 @@ function inserirDados(sheet, dados) {
 
 function removerRegistrosExistentes(sheet, municipio, convenio, ano, mes) {
   const dados = sheet.getDataRange().getValues();
-  const linhasParaExcluir = [];
-
+  let rangeStart = -1;
+  let rangeCount = 0;
+  
+  // Varre de baixo para cima para excluir intervalos contíguos sem alterar os índices superiores
   for (let i = dados.length - 1; i > 0; i--) {
-    if (dados[i][1] == municipio && String(dados[i][2]) == String(convenio) && 
-        String(dados[i][3]) == String(ano) && String(dados[i][4]) == String(mes)) {
-      linhasParaExcluir.push(i + 1);
+    const corresponde = dados[i][1] == municipio && String(dados[i][2]) == String(convenio) && 
+                        String(dados[i][3]) == String(ano) && String(dados[i][4]) == String(mes);
+    
+    if (corresponde) {
+      if (rangeStart === -1) {
+        rangeStart = i + 1;
+        rangeCount = 1;
+      } else {
+        rangeCount++;
+      }
+    } else {
+      if (rangeStart !== -1) {
+        sheet.deleteRows(rangeStart - rangeCount + 1, rangeCount);
+        rangeStart = -1;
+        rangeCount = 0;
+      }
     }
   }
-
-  for (let i = 0; i < linhasParaExcluir.length; i++) {
-    sheet.deleteRow(linhasParaExcluir[i]);
+  if (rangeStart !== -1) {
+    sheet.deleteRows(rangeStart - rangeCount + 1, rangeCount);
   }
 }
 

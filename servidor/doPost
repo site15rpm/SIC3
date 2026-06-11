@@ -15,100 +15,211 @@ function doPost(e) {
     }
 
     const body = JSON.parse(e.postData.contents);
-    const sheetName = body.sheetName; 
-    const item = body.data && body.data[0]; 
+    const action = body.action;
 
-    if (!sheetName || !item) {
-      throw new Error("Payload inválido. Esperado 'sheetName' e 'data'.");
-    }
-
-    // Aproveita a função já existente no seu código para pegar o ID da planilha
-    const ids = getProjectIds();
-    const sheet = SpreadsheetApp.openById(ids.spreadsheetId).getSheetByName(sheetName);
-    
-    if (!sheet) {
-      throw new Error("Aba '" + sheetName + "' não encontrada.");
+    // Roteamento para a nova API REST chamada pela extensão
+    if (action) {
+      return handleApiAction(action, body);
     }
 
-    const values = sheet.getDataRange().getValues();
-    const headers = values[0];
-    
-    // Mapeamento dinâmico das colunas
-    const iConv = headers.indexOf("convenio");
-    const iAno = headers.indexOf("ano");
-    const iMes = headers.indexOf("mes");
-
-    if (iConv === -1 || iAno === -1 || iMes === -1) {
-      throw new Error("Colunas de busca (convenio, ano, mes) não encontradas no cabeçalho.");
-    }
-    
-    let rowIndexToUpdate = -1;
-    
-    // Varre as linhas buscando a correspondência exata do item processado
-    for (let i = 1; i < values.length; i++) {
-      if (String(values[i][iConv]) === String(item.convenio) && 
-          String(values[i][iAno]) === String(item.ano) && 
-          String(values[i][iMes]) === String(item.mes)) {
-        
-        rowIndexToUpdate = i + 1; // +1 porque arrays começam em 0 e planilhas em 1
-        break;
-      }
-    }
-    
-    if (rowIndexToUpdate !== -1) {
-      // Gera o Timestamp atual no fuso de Brasília
-      const timestamp = Utilities.formatDate(new Date(), "America/Sao_Paulo", "dd/MM/yyyy HH:mm:ss");
-      
-      // Coluna K (Índice 11) recebe o texto do status caso seja enviado (Ex: 'OK')
-      if (item.statusK) {
-        sheet.getRange(rowIndexToUpdate, 11).setValue(item.statusK);
-        sheet.getRange(rowIndexToUpdate, 12).setValue(timestamp); // Col L (12): Timestamp Entrada
-        sheet.getRange(rowIndexToUpdate, 13).setValue('OK'); // Col M (13): Documento Entrada
-        sheet.getRange(rowIndexToUpdate, 14).setValue(timestamp); // Col N (14): Timestamp Requisição
-        sheet.getRange(rowIndexToUpdate, 15).setValue('OK'); // Col O (15): Documento Requisição
-        sheet.getRange(rowIndexToUpdate, 16).setValue(timestamp); // Col P (16): Timestamp Análise
-        sheet.getRange(rowIndexToUpdate, 17).setValue('OK'); // Col Q (17): Documento Análise
-        sheet.getRange(rowIndexToUpdate, 18).setValue(timestamp); // Col R (18): Timestamp Saída
-        sheet.getRange(rowIndexToUpdate, 19).setValue('OK'); // Col S (19): Documento Saída
-      }
-      
-      // --- LÓGICA CONDICIONAL DE PREENCHIMENTO PROGRESSIVO ---
-      
-      // Se for a rotina SIAD_AnexoD_Entrada (Envia chave "documentoEntrada")
-      if (item.documentoEntrada !== undefined) {
-        sheet.getRange(rowIndexToUpdate, 12).setValue(timestamp); // Col L (12): Timestamp Entrada
-        sheet.getRange(rowIndexToUpdate, 13).setValue(item.documentoEntrada); // Col M (13): Documento Entrada
-      }
-      
-      // Se for a rotina SIAD_AnexoD_Requisicao (Envia chave "documentoRequisicao")
-      if (item.documentoRequisicao !== undefined) {
-        sheet.getRange(rowIndexToUpdate, 14).setValue(timestamp); // Col N (14): Timestamp Requisição
-        sheet.getRange(rowIndexToUpdate, 15).setValue(item.documentoRequisicao); // Col O (15): Documento Requisição
-      }
-      
-      // Se for a rotina SIAD_AnexoD_Analise (Envia chave "documentoAnalise")
-      if (item.documentoAnalise !== undefined) {
-        sheet.getRange(rowIndexToUpdate, 16).setValue(timestamp); // Col P (16): Timestamp Análise
-        sheet.getRange(rowIndexToUpdate, 17).setValue(item.documentoAnalise); // Col Q (17): Documento Análise
-      }
-      
-      // Se for a rotina SIAD_AnexoD_Saida (Envia chave "documentoSaida")
-      if (item.documentoSaida !== undefined) {
-        sheet.getRange(rowIndexToUpdate, 11).setValue("OK"); // Finaliza a linha fechando a pendência
-        sheet.getRange(rowIndexToUpdate, 18).setValue(timestamp); // Col R (18): Timestamp Saída
-        sheet.getRange(rowIndexToUpdate, 19).setValue(item.documentoSaida); // Col S (19): Documento Saída
-      }
-      
-      // Retorna TEXT em vez de JSON para evitar o bloqueio de CORS no redirecionamento 302 do Google
-      return ContentService.createTextOutput(JSON.stringify({success: true, status: "success"}))
-        .setMimeType(ContentService.MimeType.TEXT);
-    } else {
-      return ContentService.createTextOutput(JSON.stringify({success: false, error: "Linha correspondente ao Convênio/Ano/Mês não encontrada."}))
-        .setMimeType(ContentService.MimeType.TEXT);
-    }
+    // Lógica legada (compatibilidade com integrações antigas da extensão SisPMG+)
+    return handleLegacyPost(body);
     
   } catch(err) {
     return ContentService.createTextOutput(JSON.stringify({success: false, error: err.toString()}))
       .setMimeType(ContentService.MimeType.TEXT);
   }
+}
+
+/**
+ * Roteador central para as requisições de API vindas do frontend local da extensão
+ */
+function handleApiAction(action, body) {
+  const token = body.authToken;
+  const params = body.params || {};
+  
+  // Rota de Login (Pública)
+  if (action === "login") {
+    const result = loginCheck(params.username, params.password);
+    return ContentService.createTextOutput(JSON.stringify(result))
+      .setMimeType(ContentService.MimeType.TEXT);
+  }
+  
+  // Validação do Token de Acesso (Rotas Protegidas)
+  const usuario = validateAuthToken(token);
+  if (!usuario) {
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false, 
+      message: "Sessão expirada ou acesso não autorizado. Faça login novamente.", 
+      errorCode: "UNAUTHORIZED"
+    })).setMimeType(ContentService.MimeType.TEXT);
+  }
+  
+  let result;
+  
+  switch (action) {
+    case "carregarConvenios":
+      result = carregarConveniosMunicipio(params.municipio || usuario.municipio, usuario);
+      break;
+      
+    case "salvarDados":
+      result = salvarDadosNaPlanilha(token, params.municipio, params.convenio, params.ano, params.mes, params.dados);
+      break;
+      
+    case "obterItens99":
+      result = obterDadosItens99(token, params.filtros || {});
+      break;
+      
+    case "gerenciarItem99":
+      result = gerenciarItem99(params.operacao, params.dados);
+      break;
+      
+    case "excluirItem99":
+      result = excluirItem99Principal(token, params.item99Codigo);
+      break;
+      
+    case "atualizarStatusItem99":
+      result = atualizarStatusItem99(token, params.item99Codigo, params.novoStatus);
+      break;
+      
+    case "substituirItem99":
+      result = substituirItem99(token, params.dados);
+      break;
+      
+    case "gerenciarEnderecoMedidor":
+      result = gerenciarEnderecoMedidor(token, params.dados);
+      break;
+      
+    case "obterDetalhesItemPortal":
+      result = obterDetalhesItemPortal(params.itemId);
+      break;
+      
+    case "buscarNoPortalCompras":
+      result = buscarNoPortalCompras(params.termoBusca);
+      break;
+      
+    case "verificarStatusBloqueio":
+      result = verificarStatusBloqueio(params.municipio, params.convenio, params.ano, params.mes);
+      break;
+      
+    case "atualizarStatusEdicao":
+      result = atualizarStatusEdicao(token, params.municipio, params.convenio, params.ano, params.mes, params.status);
+      break;
+      
+    case "agendarRebloqueio24h":
+      result = agendarRebloqueio24h(params.municipio, params.convenio, params.ano, params.mes, usuario.username);
+      break;
+      
+    case "incluirConvenio":
+      result = incluirConvenio(token, params.municipio, params.convenio, params.preposto_n, params.preposto_pg, params.preposto, params.unidade, params.dataInicio, params.dataFim);
+      break;
+      
+    case "alterarConvenio":
+      result = alterarConvenio(token, params.municipio, params.convenio, params.preposto_n, params.preposto_pg, params.preposto, params.unidade, params.dataInicio, params.dataFim);
+      break;
+      
+    case "excluirConvenio":
+      result = excluirConvenio(token, params.municipio, params.convenio);
+      break;
+      
+    default:
+      throw new Error("Rota de API '" + action + "' não cadastrada no servidor.");
+  }
+  
+  return ContentService.createTextOutput(JSON.stringify(result !== undefined ? result : { success: true }))
+    .setMimeType(ContentService.MimeType.TEXT);
+}
+
+/**
+ * Trata as requisições legadas com gravação otimizada em lote
+ */
+function handleLegacyPost(body) {
+  const sheetName = body.sheetName; 
+  const item = body.data && body.data[0]; 
+
+  if (!sheetName || !item) {
+    throw new Error("Payload legado inválido. Esperado 'sheetName' e 'data'.");
+  }
+
+  const ids = getProjectIds();
+  const sheet = SpreadsheetApp.openById(ids.spreadsheetId).getSheetByName(sheetName);
+  
+  if (!sheet) {
+    throw new Error("Aba '" + sheetName + "' não encontrada.");
+  }
+
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0];
+  
+  const iConv = headers.indexOf("convenio");
+  const iAno = headers.indexOf("ano");
+  const iMes = headers.indexOf("mes");
+
+  if (iConv === -1 || iAno === -1 || iMes === -1) {
+    throw new Error("Colunas de busca (convenio, ano, mes) não encontradas no cabeçalho.");
+  }
+  
+  let rowIndexToUpdate = -1;
+  
+  for (let i = 1; i < values.length; i++) {
+    if (String(values[i][iConv]) === String(item.convenio) && 
+        String(values[i][iAno]) === String(item.ano) && 
+        String(values[i][iMes]) === String(item.mes)) {
+      
+      rowIndexToUpdate = i + 1;
+      break;
+    }
+  }
+  
+  if (rowIndexToUpdate === -1) {
+    return ContentService.createTextOutput(JSON.stringify({success: false, error: "Linha correspondente ao Convênio/Ano/Mês não encontrada."}))
+      .setMimeType(ContentService.MimeType.TEXT);
+  }
+
+  const timestamp = Utilities.formatDate(new Date(), "America/Sao_Paulo", "dd/MM/yyyy HH:mm:ss");
+  
+  // Lemos as colunas 11 a 19 de uma só vez (1 linha, 9 colunas)
+  const range = sheet.getRange(rowIndexToUpdate, 11, 1, 9);
+  const rowValues = range.getValues()[0];
+
+  // Se for enviado statusK completo
+  if (item.statusK) {
+    rowValues[0] = item.statusK; // Col K (11)
+    rowValues[1] = timestamp;    // Col L (12)
+    rowValues[2] = 'OK';         // Col M (13)
+    rowValues[3] = timestamp;    // Col N (14)
+    rowValues[4] = 'OK';         // Col O (15)
+    rowValues[5] = timestamp;    // Col P (16)
+    rowValues[6] = 'OK';         // Col Q (17)
+    rowValues[7] = timestamp;    // Col R (18)
+    rowValues[8] = 'OK';         // Col S (19)
+  }
+  
+  // Tratamentos incrementais/progressivos
+  if (item.documentoEntrada !== undefined) {
+    rowValues[1] = timestamp;
+    rowValues[2] = item.documentoEntrada;
+  }
+  
+  if (item.documentoRequisicao !== undefined) {
+    rowValues[3] = timestamp;
+    rowValues[4] = item.documentoRequisicao;
+  }
+  
+  if (item.documentoAnalise !== undefined) {
+    rowValues[5] = timestamp;
+    rowValues[6] = item.documentoAnalise;
+  }
+  
+  if (item.documentoSaida !== undefined) {
+    rowValues[0] = "OK"; 
+    rowValues[7] = timestamp;
+    rowValues[8] = item.documentoSaida;
+  }
+  
+  // Grava o lote inteiro com apenas um comando I/O
+  range.setValues([rowValues]);
+  
+  return ContentService.createTextOutput(JSON.stringify({success: true, status: "success"}))
+    .setMimeType(ContentService.MimeType.TEXT);
 }
